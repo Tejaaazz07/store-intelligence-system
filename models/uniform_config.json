@@ -1,0 +1,36 @@
+{
+  "profiles": [
+    {
+      "label": "Grey + Orange",
+      "hsv_ranges": [
+        [
+          [
+            0,
+            0,
+            80
+          ],
+          [
+            180,
+            45,
+            200
+          ]
+        ],
+        [
+          [
+            11,
+            100,
+            80
+          ],
+          [
+            24,
+            255,
+            255
+          ]
+        ]
+      ],
+      "source": "description",
+      "description": "Light Grey polo shirt with an orange logo on the left chest"
+    }
+  ],
+  "match_threshold": 0.18
+}

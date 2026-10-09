@@ -22,6 +22,13 @@ import numpy as np
 from collections import deque
 from ultralytics import YOLO
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Add current folder to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from face_recognizer import FaceIdentifier

@@ -18,10 +18,18 @@ It combines two signals:
 """
 
 import os
+import sys
 import json
 import cv2
 import numpy as np
 from typing import List, Tuple, Optional, Dict
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ── Named-colour table (HSV ranges) ───────────────────────────────────────────
 # Each entry: list of (lower_hsv, upper_hsv) tuples.
@@ -440,6 +448,9 @@ class UniformDetector:
             label_text = label_text[:42] + "..."
         cv2.putText(swatch, f"Uniform: {label_text}", (10, 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.imshow(window_name, swatch)
-        cv2.waitKey(2000)
-        cv2.destroyWindow(window_name)
+        try:
+            cv2.imshow(window_name, swatch)
+            cv2.waitKey(2000)
+            cv2.destroyWindow(window_name)
+        except Exception:
+            pass
