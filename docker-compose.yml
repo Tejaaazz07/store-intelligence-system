@@ -1,0 +1,12 @@
+services:
+  api:
+    build: .
+    container_name: store-intelligence-api
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - .:/app
+
+    restart: unless-stopped

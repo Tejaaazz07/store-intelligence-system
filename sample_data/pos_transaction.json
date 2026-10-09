@@ -1,0 +1,17 @@
+[
+    {
+        "transaction_id": "TX001",
+        "store_id": "STORE_BLR_002",
+        "amount": 1200
+    },
+    {
+        "transaction_id": "TX002",
+        "store_id": "STORE_BLR_002",
+        "amount": 850
+    },
+    {
+        "transaction_id": "TX003",
+        "store_id": "STORE_BLR_002",
+        "amount": 650
+    }
+]
