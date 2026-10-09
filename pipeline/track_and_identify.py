@@ -227,13 +227,20 @@ def run_pipeline(source="0", show_window=True, save_output=False,
         print("   python pipeline/register_uniform.py --image <photo.jpg>")
         print("   Everyone will be shown as VISITOR until a uniform is registered.")
 
-    cap = cv2.VideoCapture(video_src)
+    # Open video capture (use DirectShow on Windows for reliable webcam access)
+    if isinstance(video_src, int) and sys.platform == "win32":
+        cap = cv2.VideoCapture(video_src, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(video_src)
+    else:
+        cap = cv2.VideoCapture(video_src)
+
     if not cap.isOpened():
         print(f"❌ Cannot open video source '{source}'")
         return
 
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
     fps    = cap.get(cv2.CAP_PROP_FPS) or 25.0
 
     out = None
@@ -248,13 +255,24 @@ def run_pipeline(source="0", show_window=True, save_output=False,
     banner_text       = ""
     banner_timer      = 0.0
     frame_count       = 0
+    consecutive_empty = 0
 
-    print("\n🎥 Running... Press 'q' to exit.\n")
+    window_name = "Store Intelligence — Worker / Visitor Classification"
+    if show_window:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    print("\n🎥 Running... Press 'q' inside the video window to exit.\n")
 
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret:
-            break
+        if not ret or frame is None:
+            consecutive_empty += 1
+            if consecutive_empty > 20:
+                print("❌ Video feed ended or camera disconnected.")
+                break
+            time.sleep(0.02)
+            continue
+        consecutive_empty = 0
         frame_count += 1
 
         # ── Background subtraction (whole frame) ──────────────────────
@@ -380,8 +398,9 @@ def run_pipeline(source="0", show_window=True, save_output=False,
             out.write(frame)
 
         if show_window:
-            cv2.imshow("Store Intelligence — Worker / Visitor Classification", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            cv2.imshow(window_name, frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q') or key == 27:  # 'q' or Esc to quit
                 break
 
     cap.release()
