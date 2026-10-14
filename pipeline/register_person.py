@@ -3,6 +3,13 @@ import sys
 import argparse
 import cv2
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 def register_from_image(image_path, name, person_id=""):
     os.makedirs("known_people", exist_ok=True)
     if not os.path.exists(image_path):
@@ -21,7 +28,13 @@ def register_from_image(image_path, name, person_id=""):
 
 def register_from_webcam(name, person_id=""):
     os.makedirs("known_people", exist_ok=True)
-    cap = cv2.VideoCapture(0)
+    if sys.platform == "win32":
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(0)
+    else:
+        cap = cv2.VideoCapture(0)
+
     if not cap.isOpened():
         print("❌ Error: Unable to open webcam.")
         return
