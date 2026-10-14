@@ -149,14 +149,14 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
 
     # ── Live counts ────────────────────────────────────────────────────
     counts = classifier.active_counts()
-    count_text = (f"Workers: {counts['workers']} (Hackers: {counts['hackers']}, "
-                  f"Hustlers: {counts['hustlers']})   Customers: {counts['customers']}")
+    count_text = (f"Workers: {counts['workers']} | Visionaries: {counts['visionaries']} | "
+                  f"Hackers: {counts['hackers']} | Customers: {counts['customers']}")
     cv2.putText(frame, count_text,
-                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 255, 180), 2)
+                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 255, 180), 2)
 
     # ── Legend ─────────────────────────────────────────────────────────
     legend_x = width - 250
-    legend_h = 105
+    legend_h = 120
     cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (30, 30, 30), -1)
     cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (80, 80, 80), 1)
     cv2.putText(frame, "Legend & Roles", (legend_x + 10, 28),
@@ -164,6 +164,7 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
 
     y_off = 48
     legend_items = [
+        ("Visionary (Tejas)", ROLE_STYLES["Visionary"]["color"]),
         ("Hacker (Lakshana, Mehaa)", ROLE_STYLES["Hacker"]["color"]),
         ("Hustler (Shirley)", ROLE_STYLES["Hustler"]["color"]),
         ("Customer (Shopper)", ROLE_STYLES["Customer"]["color"]),
@@ -172,8 +173,8 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
         cv2.rectangle(frame, (legend_x + 10, y_off - 10),
                       (legend_x + 24, y_off + 2), color, -1)
         cv2.putText(frame, label_str, (legend_x + 30, y_off),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
-        y_off += 18
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1)
+        y_off += 17
 
     # ── Identification banner ──────────────────────────────────────────
     if banner_text and (time.time() - banner_timer) < 4.0:

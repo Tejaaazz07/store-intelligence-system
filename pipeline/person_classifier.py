@@ -2,6 +2,7 @@
 person_classifier.py
 ====================
 Role & Category classifier based on face identification:
+  • Tejas     → ★ Visionary
   • Lakshana  → ★ Hacker
   • Shirley   → ★ Hustler
   • Mehaa     → ★ Hacker
@@ -18,6 +19,7 @@ CONFIG_PATH = os.path.join("models", "workers_config.json")
 
 # Default categories mapping (name lowercase -> category)
 DEFAULT_WORKER_ROLES: Dict[str, str] = {
+    "tejas":    "Visionary",
     "lakshana": "Hacker",
     "shirley":  "Hustler",
     "mehaa":    "Hacker",
@@ -26,10 +28,11 @@ DEFAULT_WORKER_ROLES: Dict[str, str] = {
 # Visual styling for each role/category
 # BGR colour, display prefix, emoji badge
 ROLE_STYLES = {
-    "Hacker":   {"color": (0, 255, 128),  "prefix": "★ Hacker",  "emoji": "💻", "badge": "H"},
-    "Hustler":  {"color": (255, 105, 180), "prefix": "★ Hustler", "emoji": "⚡", "badge": "H"},
-    "Worker":   {"color": (0, 215, 255),  "prefix": "★ Worker",  "emoji": "👷", "badge": "W"},
-    "Customer": {"color": (255, 140, 0),    "prefix": "Customer",   "emoji": "🛍️", "badge": "C"},
+    "Visionary": {"color": (255, 215, 0),   "prefix": "★ Visionary", "emoji": "✨", "badge": "V"},
+    "Hacker":    {"color": (0, 255, 128),   "prefix": "★ Hacker",    "emoji": "💻", "badge": "H"},
+    "Hustler":   {"color": (255, 105, 180), "prefix": "★ Hustler",   "emoji": "⚡", "badge": "H"},
+    "Worker":    {"color": (0, 215, 255),   "prefix": "★ Worker",    "emoji": "👷", "badge": "W"},
+    "Customer":  {"color": (255, 140, 0),   "prefix": "Customer",     "emoji": "🛍️", "badge": "C"},
 }
 
 
@@ -55,7 +58,7 @@ class PersonInfo:
     """Everything we know about a tracked person in the current session."""
     track_id:        int
     role:            str = "customer"        # "worker" | "customer"
-    category:        str = "Customer"        # "Hacker" | "Hustler" | "Worker" | "Customer"
+    category:        str = "Customer"        # "Visionary" | "Hacker" | "Hustler" | "Worker" | "Customer"
     face_name:       Optional[str] = None
     face_id:         Optional[str] = None
     face_confidence: float = 0.0
@@ -96,7 +99,7 @@ class PersonInfo:
 
 class PersonClassifier:
     """
-    Classifies tracked individuals into Worker categories (Hacker, Hustler, etc.)
+    Classifies tracked individuals into Worker categories (Visionary, Hacker, Hustler, etc.)
     or Customer.
     """
 
@@ -127,7 +130,7 @@ class PersonClassifier:
             person.face_confidence = face_confidence
             person.role            = "worker"
 
-            # Determine specific category (e.g. Hacker, Hustler)
+            # Determine specific category (e.g. Visionary, Hacker, Hustler)
             cat = self._categories.get(face_name.lower(), "Worker")
             person.category = cat
         elif person.face_name is None:
@@ -146,13 +149,16 @@ class PersonClassifier:
 
     def active_counts(self) -> dict:
         """Return counts by role/category among currently tracked people."""
-        counts = {"workers": 0, "customers": 0, "hackers": 0, "hustlers": 0}
+        counts = {"workers": 0, "customers": 0, "visionaries": 0, "hackers": 0, "hustlers": 0}
         for p in self._people.values():
             if p.is_worker:
                 counts["workers"] += 1
-                if p.category == "Hacker":
+                cat_lower = p.category.lower()
+                if cat_lower == "visionary":
+                    counts["visionaries"] += 1
+                elif cat_lower == "hacker":
                     counts["hackers"] += 1
-                elif p.category == "Hustler":
+                elif cat_lower == "hustler":
                     counts["hustlers"] += 1
             else:
                 counts["customers"] += 1
