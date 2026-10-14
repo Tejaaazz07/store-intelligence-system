@@ -1,13 +1,14 @@
 """
 track_and_identify.py
 =====================
-Main video pipeline: YOLO detection → ByteTrack → Face Recognition → Role/Category.
+Main video pipeline: YOLO26 Detection → ByteTrack → Face Recognition → Role/Category.
 
 Categories:
-  • Lakshana / Mehaa   → ★ Hacker  (Staff / Tech)
-  • Shirley            → ★ Hustler (Staff / Sales)
+  • Tejas              → ★ Visionary (Staff / Leadership)
+  • Lakshana / Mehaa   → ★ Hacker    (Staff / Tech)
+  • Shirley            → ★ Hustler   (Staff / Sales)
   • Other known staff  → ★ Worker
-  • Unregistered face  → Customer (Shopper / Visitor)
+  • Unregistered face  → Customer    (Shopper / Visitor)
 """
 
 import os
@@ -41,11 +42,11 @@ from person_classifier import (
 MIN_CONFIDENCE_PCT = 85.0
 
 # Motion tracker: how many frames to observe & minimum cumulative bbox movement
-MOTION_FRAMES        = 12   # observe over 12 frames
-MIN_MOTION_PX        = 8.0  # a real moving person's box centre moves ≥ 8 px total
+MOTION_FRAMES        = 12
+MIN_MOTION_PX        = 6.0
 MOTION_WARMUP_FRAMES = MOTION_FRAMES
 
-# Background subtractor for coarse "is something actually moving here?" check
+# Background subtractor for detecting moving elements
 bg_subtractor = cv2.createBackgroundSubtractorMOG2(
     history=120, varThreshold=40, detectShadows=False
 )
@@ -136,11 +137,11 @@ def _draw_person(frame, x1, y1, x2, y2, person: PersonInfo):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
 
 
-def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_timer):
+def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_timer, model_name="YOLO26"):
     """Draw the heads-up display overlay."""
     # ── Header ─────────────────────────────────────────────────────────
     cv2.putText(frame,
-                "Store Intelligence — Role & Category Recognition",
+                f"Store Intelligence — {model_name} Detection & Face Recognition",
                 (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2)
 
     cv2.putText(frame,
@@ -185,20 +186,22 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
 
 
 # ── Main pipeline ──────────────────────────────────────────────────────────────
-def run_pipeline(source="0", show_window=True, save_output=False,
+def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_output=False,
                  output_path="sample_data/identified_output.mp4", enable_voice=True):
 
     video_src = int(source) if source.isdigit() else source
+    model_tag = "YOLO26" if "yolo26" in model_path.lower() else os.path.basename(model_path)
 
-    print(f"🚀 Initializing YOLOv8 & Face Recognition on: {source}")
-    model      = YOLO("yolov8n.pt")
+    print(f"🚀 Initializing {model_tag} ({model_path}) & Face Recognition on: {source}")
+    model      = YOLO(model_path)
     face_id    = FaceIdentifier()
     classifier = PersonClassifier()
 
     print(f"👥 Known staff registered: {len(face_id.known_database)}")
 
     # Open video capture (use DirectShow on Windows for reliable webcam access)
-    if isinstance(video_src, int) and sys.platform == "win32":
+    is_webcam = isinstance(video_src, int)
+    if is_webcam and sys.platform == "win32":
         cap = cv2.VideoCapture(video_src, cv2.CAP_DSHOW)
         if not cap.isOpened():
             cap = cv2.VideoCapture(video_src)
@@ -227,7 +230,7 @@ def run_pipeline(source="0", show_window=True, save_output=False,
     frame_count       = 0
     consecutive_empty = 0
 
-    window_name = "Store Intelligence — Role & Category Recognition"
+    window_name = f"Store Intelligence — {model_tag} Recognition"
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
@@ -245,14 +248,15 @@ def run_pipeline(source="0", show_window=True, save_output=False,
         consecutive_empty = 0
         frame_count += 1
 
-        # ── Background subtraction (whole frame) ──────────────────────
+        # ── Background subtraction ─────────────────────────────────────
         fg_mask = bg_subtractor.apply(frame)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
 
-        # ── YOLO detection ─────────────────────────────────────────────
+        # ── YOLO26 detection & tracking ────────────────────────────────
         results = model.track(frame, persist=True,
-                               tracker="bytetrack.yaml", classes=[0], verbose=False)
+                               tracker="bytetrack.yaml", classes=[0],
+                               conf=0.35, verbose=False)
 
         active_ids = set()
 
@@ -268,44 +272,47 @@ def run_pipeline(source="0", show_window=True, save_output=False,
                 x1, y1 = max(0, int(box[0])), max(0, int(box[1]))
                 x2, y2 = min(width, int(box[2])), min(height, int(box[3]))
 
-                # ── Guard 1: Minimum box size ──────────────────────────
-                if (x2 - x1) < 40 or (y2 - y1) < 80:
+                # ── Guard 1: Minimum bounding box size ─────────────────
+                if (x2 - x1) < 25 or (y2 - y1) < 35:
                     continue
 
-                # ── Guard 2: YOLO detection confidence ≥ 0.50 ──────────
-                if yolo_conf < 0.50:
+                # ── Guard 2: YOLO detection confidence ─────────────────
+                if yolo_conf < 0.35:
                     continue
 
                 cx, cy = _box_centre(x1, y1, x2, y2)
 
-                # ── Guard 3: Background-subtraction motion check ───────
-                motion_ratio = _motion_in_mask(fg_mask, x1, y1, x2, y2)
-                is_moving = motion_ratio >= 0.03
-
-                # ── Guard 4: Bbox-centre trajectory motion ─────────────
+                # ── Guard 3: Trajectory & motion history ───────────────
                 if tid not in track_box_history:
                     track_box_history[tid] = deque(maxlen=MOTION_FRAMES)
                 track_box_history[tid].append((cx, cy))
 
-                traj_motion = _total_path(track_box_history[tid])
-                has_trajectory = (len(track_box_history[tid]) >= MOTION_WARMUP_FRAMES
-                                  and traj_motion >= MIN_MOTION_PX)
+                # For video files, check for static background artifacts
+                # For webcams, never skip a live person seated in front of camera
+                person = classifier.get(tid)
+                is_known_staff = person is not None and person.is_worker
 
-                if not (is_moving or has_trajectory):
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 200), 1)
-                    cv2.putText(frame, "Static (skipped)", (x1, y1 - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 200), 1)
-                    continue
+                if not is_webcam and not is_known_staff:
+                    motion_ratio = _motion_in_mask(fg_mask, x1, y1, x2, y2)
+                    traj_motion = _total_path(track_box_history[tid])
+                    has_motion = (motion_ratio >= 0.02 or traj_motion >= MIN_MOTION_PX)
+                    if not has_motion and len(track_box_history[tid]) >= MOTION_WARMUP_FRAMES:
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 200), 1)
+                        cv2.putText(frame, "Static (skipped)", (x1, y1 - 6),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 200), 1)
+                        continue
 
                 person_crop = frame[y1:y2, x1:x2]
 
-                # ── Face recognition (every 2 frames) ──────────────────
+                # ── Face recognition ───────────────────────────────────
                 face_name = face_id_str = None
                 face_conf = 0.0
-                person = classifier.get(tid)
                 already_known = (person is not None and person.face_name is not None)
 
-                if not already_known and frame_count % 2 == 0:
+                # Check face every frame if unknown, or every 3 frames if already known
+                should_check_face = not already_known or (frame_count % 3 == 0)
+
+                if should_check_face:
                     name, pid, conf = face_id.recognize_face_in_crop(
                         person_crop, track_id=tid
                     )
@@ -353,7 +360,7 @@ def run_pipeline(source="0", show_window=True, save_output=False,
 
         # ── HUD overlay ────────────────────────────────────────────────
         _draw_hud(frame, width, height, face_id,
-                  classifier, banner_text, banner_timer)
+                  classifier, banner_text, banner_timer, model_name=model_tag)
 
         if out is not None:
             out.write(frame)
@@ -374,10 +381,12 @@ def run_pipeline(source="0", show_window=True, save_output=False,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Store Intelligence pipeline: Category-based Worker (Hacker/Hustler) vs Customer recognition."
+        description="Store Intelligence pipeline: YOLO26 Detection & Category-based Worker vs Customer recognition."
     )
     parser.add_argument("--source",   default="0",
                         help="'0' for webcam or path to MP4")
+    parser.add_argument("--model",    default="yolo26n.pt",
+                        help="YOLO model path: 'yolo26n.pt' (fast) or 'yolo26s.pt' (higher accuracy)")
     parser.add_argument("--save",     action="store_true")
     parser.add_argument("--output",   default="sample_data/identified_output.mp4")
     parser.add_argument("--no-show",  action="store_true")
@@ -385,6 +394,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_pipeline(source=args.source,
+                 model_path=args.model,
                  show_window=not args.no_show,
                  save_output=args.save,
                  output_path=args.output,

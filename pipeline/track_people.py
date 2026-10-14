@@ -1,6 +1,6 @@
 from ultralytics import YOLO
 
-model = YOLO("yolov8n.pt")
+model = YOLO("yolo26n.pt")
 
 results = model.track(
     source="sample_data/videoplayback.mp4",

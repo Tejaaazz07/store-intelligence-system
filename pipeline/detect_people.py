@@ -1,8 +1,8 @@
 from ultralytics import YOLO
 import cv2
 
-# Load YOLO model
-model = YOLO("yolov8n.pt")
+# Load YOLO26 model
+model = YOLO("yolo26n.pt")
 
 # Input video
 video_path = "sample_data/videoplayback.mp4"

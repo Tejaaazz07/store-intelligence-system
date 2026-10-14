@@ -4,7 +4,7 @@ __pycache__/
 store.db
 sample_data/*.mp4
 sample_data/*.avi
-yolov8n.pt
+*.pt
 runs/
 structure.txt
 .DS_Store
