@@ -233,6 +233,8 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
     window_name = f"Store Intelligence — {model_tag} Recognition"
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        if width > 1280 or height > 720:
+            cv2.resizeWindow(window_name, 1280, 720)
 
     print("\n🎥 Running... Press 'q' inside the video window to exit.\n")
 
