@@ -1,11 +1,13 @@
 """
 track_and_identify.py
 =====================
-Main video pipeline: YOLO detection → ByteTrack → Face Recognition → Role.
+Main video pipeline: YOLO detection → ByteTrack → Face Recognition → Role/Category.
 
-Classification:
-  • Registered face in database  → WORKER   (e.g., staff / employees)
-  • No matching face / unknown   → CUSTOMER (general shoppers / visitors)
+Categories:
+  • Lakshana / Mehaa   → ★ Hacker  (Staff / Tech)
+  • Shirley            → ★ Hustler (Staff / Sales)
+  • Other known staff  → ★ Worker
+  • Unregistered face  → Customer (Shopper / Visitor)
 """
 
 import os
@@ -31,7 +33,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from face_recognizer import FaceIdentifier
 from person_classifier import (
     PersonClassifier, PersonInfo,
-    ROLE_WORKER, ROLE_CUSTOMER, ROLE_STYLES,
+    ROLE_STYLES,
 )
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -51,14 +53,15 @@ bg_subtractor = cv2.createBackgroundSubtractorMOG2(
 # ── Voice ──────────────────────────────────────────────────────────────────────
 last_speech_time = {}
 
-def announce_voice(name):
+def announce_voice(title, name):
     now = time.time()
-    if name not in last_speech_time or (now - last_speech_time[name]) > 8.0:
-        last_speech_time[name] = now
+    key = f"{title}_{name}"
+    if key not in last_speech_time or (now - last_speech_time[key]) > 8.0:
+        last_speech_time[key] = now
         try:
             cmd = (f'Add-Type -AssemblyName System.Speech; '
                    f'(New-Object System.Speech.Synthesis.SpeechSynthesizer)'
-                   f'.Speak("Worker {name} identified")')
+                   f'.Speak("{title} {name} identified")')
             subprocess.Popen(['powershell', '-Command', cmd],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
@@ -106,21 +109,22 @@ def _motion_in_mask(fg_mask, x1, y1, x2, y2):
         return 0.0
     return np.count_nonzero(region) / region.size
 
-# ── Drawing helpers ────────────────────────────────────────────────────────────
+# ── Drawing helpers ────────────────────────────────────────────────────
 
 def _draw_person(frame, x1, y1, x2, y2, person: PersonInfo):
-    """Draw bounding box, label, and worker indicator for a person."""
+    """Draw bounding box, label, and category badge for a person."""
     colour = person.box_color
 
     # ── Bounding box ───────────────────────────────────────────────────
     thickness = 3 if person.is_worker else 2
     cv2.rectangle(frame, (x1, y1), (x2, y2), colour, thickness)
 
-    # ── Worker badge (small filled circle in top-right corner) ─────────
+    # ── Category badge (small filled circle in top-right corner) ─────────
     if person.is_worker:
         badge_center = (x2 - 12, y1 + 12)
-        cv2.circle(frame, badge_center, 10, colour, -1)
-        cv2.putText(frame, "W", (badge_center[0] - 6, badge_center[1] + 5),
+        cv2.circle(frame, badge_center, 11, colour, -1)
+        badge_letter = person.badge_text
+        cv2.putText(frame, badge_letter, (badge_center[0] - 6, badge_center[1] + 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
 
     # ── Label background + text ────────────────────────────────────────
@@ -136,7 +140,7 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
     """Draw the heads-up display overlay."""
     # ── Header ─────────────────────────────────────────────────────────
     cv2.putText(frame,
-                "Store Intelligence — Worker vs Customer Recognition",
+                "Store Intelligence — Role & Category Recognition",
                 (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2)
 
     cv2.putText(frame,
@@ -145,31 +149,36 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
 
     # ── Live counts ────────────────────────────────────────────────────
     counts = classifier.active_counts()
-    count_text = f"Workers: {counts[ROLE_WORKER]}   Customers: {counts[ROLE_CUSTOMER]}"
+    count_text = (f"Workers: {counts['workers']} (Hackers: {counts['hackers']}, "
+                  f"Hustlers: {counts['hustlers']})   Customers: {counts['customers']}")
     cv2.putText(frame, count_text,
-                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (180, 255, 180), 2)
+                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 255, 180), 2)
 
     # ── Legend ─────────────────────────────────────────────────────────
-    legend_x = width - 230
-    cv2.rectangle(frame, (legend_x, 10), (width - 10, 85), (30, 30, 30), -1)
-    cv2.rectangle(frame, (legend_x, 10), (width - 10, 85), (80, 80, 80), 1)
-    cv2.putText(frame, "Legend", (legend_x + 10, 28),
+    legend_x = width - 250
+    legend_h = 105
+    cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (30, 30, 30), -1)
+    cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (80, 80, 80), 1)
+    cv2.putText(frame, "Legend & Roles", (legend_x + 10, 28),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
     y_off = 48
-    for role_key, style in ROLE_STYLES.items():
-        role_label = "Worker (Staff)" if role_key == ROLE_WORKER else "Customer (Visitor)"
-        role_color = style["color"]
+    legend_items = [
+        ("Hacker (Lakshana, Mehaa)", ROLE_STYLES["Hacker"]["color"]),
+        ("Hustler (Shirley)", ROLE_STYLES["Hustler"]["color"]),
+        ("Customer (Shopper)", ROLE_STYLES["Customer"]["color"]),
+    ]
+    for label_str, color in legend_items:
         cv2.rectangle(frame, (legend_x + 10, y_off - 10),
-                      (legend_x + 24, y_off + 2), role_color, -1)
-        cv2.putText(frame, role_label, (legend_x + 30, y_off),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 255, 255), 1)
-        y_off += 20
+                      (legend_x + 24, y_off + 2), color, -1)
+        cv2.putText(frame, label_str, (legend_x + 30, y_off),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
+        y_off += 18
 
     # ── Identification banner ──────────────────────────────────────────
     if banner_text and (time.time() - banner_timer) < 4.0:
         cv2.rectangle(frame, (20, height - 70), (width - 20, height - 20),
-                      (0, 215, 255), -1)
+                      (0, 255, 128), -1)
         cv2.putText(frame, f"  {banner_text}", (30, height - 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.80, (0, 0, 0), 2)
 
@@ -217,7 +226,7 @@ def run_pipeline(source="0", show_window=True, save_output=False,
     frame_count       = 0
     consecutive_empty = 0
 
-    window_name = "Store Intelligence — Worker vs Customer Recognition"
+    window_name = "Store Intelligence — Role & Category Recognition"
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
@@ -304,13 +313,7 @@ def run_pipeline(source="0", show_window=True, save_output=False,
                         face_id_str = pid
                         face_conf   = conf
 
-                        banner_text  = f"WORKER IDENTIFIED: {name} ({pid})  [{conf:.1f}%]"
-                        banner_timer = time.time()
-
-                        if enable_voice:
-                            announce_voice(name)
-
-                # ── Update classification (Face match = Worker, else Customer) ──
+                # ── Update classification ──────────────────────────────
                 person = classifier.update(
                     track_id=tid,
                     face_name=face_name,
@@ -318,19 +321,25 @@ def run_pipeline(source="0", show_window=True, save_output=False,
                     face_confidence=face_conf,
                 )
 
+                if face_name is not None and face_conf >= MIN_CONFIDENCE_PCT:
+                    banner_text  = f"{person.category.upper()} IDENTIFIED: {person.face_name} ({person.face_id})  [{face_conf:.1f}%]"
+                    banner_timer = time.time()
+                    if enable_voice:
+                        announce_voice(person.category, person.face_name)
+
                 # ── Log first identification ───────────────────────────
                 log_key = f"{tid}_{person.face_name or 'customer'}"
                 if log_key not in logged_identities:
                     logged_identities.add(log_key)
                     if person.is_worker:
-                        print(f"🎯 👷 Worker: {person.face_name} (ID: {person.face_id})  "
+                        print(f"🎯 {person.emoji} {person.category}: {person.face_name} (ID: {person.face_id})  "
                               f"Confidence: {person.face_confidence:.1f}%")
                         log_event_to_db("entry",
-                                        f"{person.face_name} ({person.face_id})",
-                                        role=person.role)
+                                        f"{person.face_name} ({person.face_id}) [{person.category}]",
+                                        role=person.category.lower())
                     else:
                         print(f"🎯 🛍️ Customer #{tid} detected")
-                        log_event_to_db("entry", f"Customer #{tid}", role=person.role)
+                        log_event_to_db("entry", f"Customer #{tid}", role="customer")
 
                 # ── Draw ───────────────────────────────────────────────
                 _draw_person(frame, x1, y1, x2, y2, person)
@@ -364,7 +373,7 @@ def run_pipeline(source="0", show_window=True, save_output=False,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Store Intelligence pipeline: Face-based Worker vs Customer recognition."
+        description="Store Intelligence pipeline: Category-based Worker (Hacker/Hustler) vs Customer recognition."
     )
     parser.add_argument("--source",   default="0",
                         help="'0' for webcam or path to MP4")
