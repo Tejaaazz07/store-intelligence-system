@@ -23,6 +23,7 @@ DEFAULT_WORKER_ROLES: Dict[str, str] = {
     "lakshana": "Hacker",
     "shirley":  "Hustler",
     "mehaa":    "Hacker",
+    "rithika":  "Hustler",
 }
 
 # Visual styling for each role/category

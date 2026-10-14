@@ -167,7 +167,7 @@ def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_tim
     legend_items = [
         ("Visionary (Tejas)", ROLE_STYLES["Visionary"]["color"]),
         ("Hacker (Lakshana, Mehaa)", ROLE_STYLES["Hacker"]["color"]),
-        ("Hustler (Shirley)", ROLE_STYLES["Hustler"]["color"]),
+        ("Hustler (Shirley, Rithika)", ROLE_STYLES["Hustler"]["color"]),
         ("Customer (Shopper)", ROLE_STYLES["Customer"]["color"]),
     ]
     for label_str, color in legend_items:
