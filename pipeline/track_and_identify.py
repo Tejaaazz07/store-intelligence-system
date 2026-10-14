@@ -223,13 +223,12 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
                               cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
     # Per-track state
-    track_box_history    = {}                     # track_id -> deque of (cx, cy)
-    track_aspect_history = {}                     # track_id -> deque of aspect ratio (w/h)
-    logged_identities    = set()
-    banner_text          = ""
-    banner_timer         = 0.0
-    frame_count          = 0
-    consecutive_empty    = 0
+    track_box_history = {}                        # track_id -> deque of (cx, cy)
+    logged_identities = set()
+    banner_text       = ""
+    banner_timer      = 0.0
+    frame_count       = 0
+    consecutive_empty = 0
 
     window_name = f"Store Intelligence — {model_tag} Recognition"
     if show_window:
@@ -258,8 +257,8 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
 
         # ── YOLO26 detection & tracking ────────────────────────────────
         results = model.track(frame, persist=True,
-                                tracker="bytetrack.yaml", classes=[0],
-                                conf=0.35, verbose=False)
+                               tracker="bytetrack.yaml", classes=[0],
+                               conf=0.35, verbose=False)
 
         active_ids = set()
 
@@ -284,45 +283,39 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
                     continue
 
                 cx, cy = _box_centre(x1, y1, x2, y2)
-                bw, bh = (x2 - x1), (y2 - y1)
-                aspect = bw / max(bh, 1)
 
                 # ── Guard 3: Trajectory & motion history ───────────────
                 if tid not in track_box_history:
                     track_box_history[tid] = deque(maxlen=MOTION_FRAMES)
                 track_box_history[tid].append((cx, cy))
 
-                if tid not in track_aspect_history:
-                    track_aspect_history[tid] = deque(maxlen=MOTION_FRAMES)
-                track_aspect_history[tid].append(aspect)
-
+                # For video files, check for static background artifacts
+                # For webcams, never skip a live person seated in front of camera
                 person = classifier.get(tid)
                 is_known_staff = person is not None and person.is_worker
 
-                # Detect static background / rigid wall art
-                is_static_artwork = False
                 if not is_webcam and not is_known_staff:
                     motion_ratio = _motion_in_mask(fg_mask, x1, y1, x2, y2)
-                    traj_motion  = _total_path(track_box_history[tid])
-                    if len(track_box_history[tid]) >= 8:
-                        aspect_var = float(np.var(track_aspect_history[tid]))
-                        # Wall paintings are rigid 2D planar frames (aspect_var ~ 0) and have minimal trajectory
-                        if traj_motion < 6.0 and (motion_ratio < 0.02 or aspect_var < 0.0002):
-                            is_static_artwork = True
+                    traj_motion = _total_path(track_box_history[tid])
+                    has_motion = (motion_ratio >= 0.02 or traj_motion >= MIN_MOTION_PX)
+                    if not has_motion and len(track_box_history[tid]) >= MOTION_WARMUP_FRAMES:
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 200), 1)
+                        cv2.putText(frame, "Static (skipped)", (x1, y1 - 6),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 200), 1)
+                        continue
 
                 person_crop = frame[y1:y2, x1:x2]
 
-                # ── Face recognition & liveness check ──────────────────
+                # ── Face recognition ───────────────────────────────────
                 face_name = face_id_str = None
                 face_conf = 0.0
-                is_painting_face = False
                 already_known = (person is not None and person.face_name is not None)
 
                 # Check face every frame if unknown, or every 3 frames if already known
                 should_check_face = not already_known or (frame_count % 3 == 0)
 
                 if should_check_face:
-                    name, pid, conf, is_painting_face = face_id.recognize_face_in_crop(
+                    name, pid, conf = face_id.recognize_face_in_crop(
                         person_crop, track_id=tid
                     )
                     if name is not None and conf >= MIN_CONFIDENCE_PCT:
@@ -336,16 +329,7 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
                     face_name=face_name,
                     face_id=face_id_str,
                     face_confidence=face_conf,
-                    is_painting=(is_painting_face or is_static_artwork),
                 )
-
-                # ── Filter out paintings and artwork completely ────────
-                if person.is_painting:
-                    continue
-
-                # ── Filter out unconfirmed transient tracks ────────────
-                if not person.is_confirmed and not person.is_worker:
-                    continue
 
                 if face_name is not None and face_conf >= MIN_CONFIDENCE_PCT:
                     banner_text  = f"{person.category.upper()} IDENTIFIED: {person.face_name} ({person.face_id})  [{face_conf:.1f}%]"
@@ -363,7 +347,7 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
                         log_event_to_db("entry",
                                         f"{person.face_name} ({person.face_id}) [{person.category}]",
                                         role=person.category.lower())
-                    elif person.is_customer:
+                    else:
                         print(f"🎯 🛍️ Customer #{tid} detected")
                         log_event_to_db("entry", f"Customer #{tid}", role="customer")
 
@@ -374,7 +358,6 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
         gone = set(track_box_history) - active_ids
         for tid in gone:
             track_box_history.pop(tid, None)
-            track_aspect_history.pop(tid, None)
             classifier.remove(tid)
 
         # ── HUD overlay ────────────────────────────────────────────────

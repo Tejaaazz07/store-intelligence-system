@@ -38,47 +38,59 @@ class FaceIdentifier:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _check_face_liveness(self, face, crop_bgr, crop_h, crop_w, track_id=None):
+    def _is_real_human_face(self, face, crop_bgr, crop_h, crop_w, track_id=None):
         """
-        Multi-factor liveness and 2D painting check.
-        Returns: (is_live: bool, is_painting: bool)
+        Multi-factor liveness check.
+        Returns True only if this looks like a real 3D human face.
         """
         fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
-
+        
         # ── 1. Basic size & position guard ────────────────────────────
         if fw < self.min_face_w or fh < self.min_face_h:
-            return False, False
+            return False
         face_center_y = fy + fh / 2
-        if crop_h > 0 and (face_center_y / crop_h) > 0.65:
-            return False, False
+        if crop_h > 0 and (face_center_y / crop_h) > 0.60:
+            return False  # Face in lower 40 % of body crop → likely not a face
 
+        # Aspect ratio: real faces are roughly square to slightly tall
         aspect = fw / max(fh, 1)
-        if aspect < 0.45 or aspect > 1.65:
-            return False, True  # Unnatural distorted painted face
+        if aspect < 0.5 or aspect > 1.6:
+            return False
+
+        # Face must cover at least 2 % of the person crop area
+        if (fw * fh) / max(crop_h * crop_w, 1) < 0.02:
+            return False
 
         # ── 2. Skin-tone check (HSV range for human skin) ─────────────
         x1 = max(0, fx); y1 = max(0, fy)
         x2 = min(crop_w, fx + fw); y2 = min(crop_h, fy + fh)
         face_region = crop_bgr[y1:y2, x1:x2]
         if face_region.size == 0:
-            return False, False
-
+            return False
+        
         hsv = cv2.cvtColor(face_region, cv2.COLOR_BGR2HSV)
+        # Human skin HSV: H 0-25 or 165-180, S 20-175, V 60-255
         mask1 = cv2.inRange(hsv, (0, 20, 60), (25, 175, 255))
         mask2 = cv2.inRange(hsv, (165, 20, 60), (180, 175, 255))
         skin_mask = cv2.bitwise_or(mask1, mask2)
         skin_ratio = np.count_nonzero(skin_mask) / max(skin_mask.size, 1)
-
-        # Paintings often use artificial oil/acrylic pigments
-        if skin_ratio < 0.12:
-            return False, True
+        
+        # A real face crop should have at least 10 % skin-tone pixels
+        if skin_ratio < 0.10:
+            return False
 
         # ── 3. Eye-region texture (Laplacian variance) ────────────────
+        # Paintings have very smooth eye areas; real eyes have fine texture
+        # YuNet provides 5 landmarks: [right_eye, left_eye, nose, r_mouth, l_mouth]
+        # Landmarks start at index 4 in the face array: (x4,y4), (x5,y5), ...
         try:
+            # Right eye
             rex, rey = int(face[4]), int(face[5])
+            # Left eye
             lex, ley = int(face[6]), int(face[7])
+            
             eye_patch_size = max(10, fw // 5)
-
+            
             def eye_patch_variance(cx, cy):
                 ex1 = max(0, cx - eye_patch_size)
                 ey1 = max(0, cy - eye_patch_size)
@@ -89,87 +101,60 @@ class FaceIdentifier:
                     return 999.0
                 gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
                 lap = cv2.Laplacian(gray, cv2.CV_64F)
-                return float(lap.var())
-
+                return lap.var()
+            
             right_var = eye_patch_variance(rex, rey)
             left_var  = eye_patch_variance(lex, ley)
             avg_eye_var = (right_var + left_var) / 2
-
-            # Paintings have smooth brush strokes/prints (< 65 var)
-            # Real human eyes with specular highlights & lashes are > 65
-            if avg_eye_var < 65.0:
-                return False, True
-
+            
+            # Flat/painted eyes have very low Laplacian variance (< 60)
+            # Real eyes (with texture, reflections, lashes) are typically > 60
+            if avg_eye_var < 60.0:
+                return False
+            
             # ── 4. Landmark geometry sanity ───────────────────────────
             nose_x, nose_y = int(face[8]), int(face[9])
+            
             inter_eye_dist = np.hypot(rex - lex, rey - ley)
-            if inter_eye_dist < 6:
-                return False, True
+            if inter_eye_dist < 5:
+                return False  # Eyes on top of each other → bad detection
+            
+            # Nose should be below both eyes
             if nose_y <= min(rey, ley):
-                return False, True
-
+                return False
+            
+            # Nose should be roughly centred between the eyes
+            nose_x_ratio = abs(nose_x - (rex + lex) / 2) / max(inter_eye_dist, 1)
+            if nose_x_ratio > 0.7:
+                return False  # Nose too far to one side
+            
             # ── 5. Micro-motion liveness (over several frames) ────────
             if track_id is not None:
                 eye_cx = (rex + lex) / 2
                 eye_cy = (rey + ley) / 2
+                
                 if track_id not in self._motion_history:
                     self._motion_history[track_id] = deque(maxlen=self._MOTION_WINDOW)
+                
                 self._motion_history[track_id].append((eye_cx, eye_cy))
                 history = self._motion_history[track_id]
-
+                
                 if len(history) >= self._MOTION_WINDOW:
                     positions = np.array(list(history))
+                    # Total path length over the observation window
                     diffs = np.diff(positions, axis=0)
                     total_motion = np.sum(np.hypot(diffs[:, 0], diffs[:, 1]))
+                    
+                    # Paintings: total_motion ≈ 0 (perfectly static)
+                    # Real faces: even if the person is still, camera noise
+                    # and micro-expressions create > 1.5 px of total movement
                     if total_motion < self._MIN_MOTION_PX:
-                        return False, True  # Perfectly static on wall -> painting!
+                        return False  # Too static → likely a painting/poster
 
         except (IndexError, TypeError):
-            pass
+            pass  # If landmarks are malformed, skip geometry checks
 
-        return True, False
-
-    def is_artwork_crop(self, crop_bgr):
-        """
-        Detects if a bounding box crop is a wall painting, poster, or framed picture.
-        Checks for:
-          1. Rectangular frame borders along the perimeter
-          2. Abnormally flat/uniform texture or low Laplacian variance
-        """
-        if crop_bgr is None or crop_bgr.size == 0:
-            return False
-
-        h, w = crop_bgr.shape[:2]
-        if h < 40 or w < 30:
-            return False
-
-        gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-
-        # 1. Check for prominent rectangular frame border lines along crop edges
-        border_t = max(2, int(h * 0.10))
-        border_s = max(2, int(w * 0.10))
-        if border_t > 2 and border_s > 2:
-            edges = cv2.Canny(gray, 60, 160)
-            top_strip    = edges[:border_t, :]
-            bottom_strip = edges[h - border_t:, :]
-            left_strip   = edges[:, :border_s]
-            right_strip  = edges[:, w - border_s:]
-
-            top_density    = np.count_nonzero(top_strip) / max(top_strip.size, 1)
-            bottom_density = np.count_nonzero(bottom_strip) / max(bottom_strip.size, 1)
-            left_density   = np.count_nonzero(left_strip) / max(left_strip.size, 1)
-            right_density  = np.count_nonzero(right_strip) / max(right_strip.size, 1)
-
-            # A framed painting has distinct border lines along top/bottom AND left/right
-            if (top_density > 0.08 and bottom_density > 0.08) and (left_density > 0.08 and right_density > 0.08):
-                return True
-
-        # 2. Texture flatness check: drawings/posters have unnaturally flat surface texture
-        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        if lap_var < 18.0:
-            return True
-
-        return False
+        return True
 
     def _extract_face_feature(self, img_bgr):
         """Extract embedding from best face in a reference photo."""
@@ -216,41 +201,30 @@ class FaceIdentifier:
         """
         Identify a face within a YOLO person bounding box.
         track_id is passed to enable cross-frame micro-motion liveness.
-        Returns: (name, person_id, confidence%, is_painting: bool)
+        Returns (name, person_id, confidence%) or (None, None, 0.0).
         """
+        if not self.known_database:
+            return None, None, 0.0
         if crop_bgr is None or crop_bgr.size == 0:
-            return None, None, 0.0, False
+            return None, None, 0.0
 
         h, w = crop_bgr.shape[:2]
-        if h < 50 or w < 35:
-            return None, None, 0.0, False
-
-        # Visual artwork surface test
-        is_art = self.is_artwork_crop(crop_bgr)
+        if h < 60 or w < 40:
+            return None, None, 0.0
 
         self.detector.setInputSize((w, h))
         _, faces = self.detector.detect(crop_bgr)
-        has_faces = faces is not None and len(faces) > 0
+        if faces is None or len(faces) == 0:
+            return None, None, 0.0
 
-        if not has_faces:
-            # No face detected by YuNet. If artwork features matched, flag as painting
-            return None, None, 0.0, is_art
-
-        # Evaluate face liveness
-        live_faces = []
-        is_painting_face = False
-        for f in faces:
-            is_live, is_fake = self._check_face_liveness(f, crop_bgr, h, w, track_id)
-            if is_live:
-                live_faces.append(f)
-            elif is_fake:
-                is_painting_face = True
-
+        # Apply full liveness filter
+        live_faces = [
+            f for f in faces
+            if self._is_real_human_face(f, crop_bgr, h, w, track_id)
+        ]
         if not live_faces:
-            # Face was detected, but failed liveness -> 2D painting / poster!
-            return None, None, 0.0, True
+            return None, None, 0.0
 
-        # Process live human face
         best_face = max(live_faces, key=lambda f: f[2] * f[3])
         aligned = self.recognizer.alignCrop(crop_bgr, best_face)
         feature = self.recognizer.feature(aligned)
@@ -268,7 +242,6 @@ class FaceIdentifier:
 
         if best_match is not None:
             conf = min(100.0, max(0.0, (best_score / 0.8) * 100))
-            return best_match, best_id, conf, False
+            return best_match, best_id, conf
 
-        # Real living human face that is not in staff database (customer)
-        return None, None, 0.0, False
+        return None, None, 0.0
