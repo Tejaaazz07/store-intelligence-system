@@ -63,6 +63,7 @@ class PersonInfo:
     face_name:       Optional[str] = None
     face_id:         Optional[str] = None
     face_confidence: float = 0.0
+    frames_seen:     int = 0
 
     # ── Display helpers ────────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ class PersonClassifier:
         if track_id not in self._people:
             self._people[track_id] = PersonInfo(track_id=track_id)
         person = self._people[track_id]
+        person.frames_seen += 1
 
         if face_name and face_confidence > person.face_confidence:
             person.face_name       = face_name

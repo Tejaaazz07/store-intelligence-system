@@ -1,35 +1,43 @@
 import os
+import sys
 import cv2
 import numpy as np
 from collections import deque
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 class FaceIdentifier:
     def __init__(self, 
                  yunet_model="models/face_detection_yunet_2023mar.onnx",
                  sface_model="models/face_recognition_sface_2021dec.onnx",
                  known_dir="known_people",
-                 cosine_threshold=0.40):
+                 cosine_threshold=0.45):
         
         self.known_dir = known_dir
         self.cosine_threshold = cosine_threshold
         os.makedirs(self.known_dir, exist_ok=True)
         
-        # YuNet with high threshold
+        # YuNet with optimal video detection threshold (0.60 provides high recall for angled/moving faces)
         self.detector = cv2.FaceDetectorYN.create(
-            yunet_model, "", (320, 320), score_threshold=0.85
+            yunet_model, "", (320, 320), score_threshold=0.60
         )
         self.recognizer = cv2.FaceRecognizerSF.create(sface_model, "")
         
-        # Minimum face pixel dimensions
-        self.min_face_w = 45
-        self.min_face_h = 45
+        # Minimum face pixel dimensions (allow distant and full-body faces)
+        self.min_face_w = 22
+        self.min_face_h = 22
 
         # Track face crops over frames to measure micro-movement (liveness)
         # Maps track_id -> deque of previous eye-center positions
         self._motion_history = {}  # track_id -> deque of (eye_cx, eye_cy)
         self._liveness_cache = {}  # track_id -> (is_live, frame_count)
         self._MOTION_WINDOW = 8    # frames to observe for motion
-        self._MIN_MOTION_PX = 1.5  # minimum pixel shift over window to be "live"
+        self._MIN_MOTION_PX = 1.0  # minimum pixel shift over window to be "live"
 
         self.known_database = {}
         self.load_known_people()
@@ -49,16 +57,16 @@ class FaceIdentifier:
         if fw < self.min_face_w or fh < self.min_face_h:
             return False
         face_center_y = fy + fh / 2
-        if crop_h > 0 and (face_center_y / crop_h) > 0.60:
-            return False  # Face in lower 40 % of body crop → likely not a face
+        if crop_h > 0 and (face_center_y / crop_h) > 0.80:
+            return False  # Face in very bottom of body crop → likely not a face
 
         # Aspect ratio: real faces are roughly square to slightly tall
         aspect = fw / max(fh, 1)
-        if aspect < 0.5 or aspect > 1.6:
+        if aspect < 0.40 or aspect > 1.8:
             return False
 
-        # Face must cover at least 2 % of the person crop area
-        if (fw * fh) / max(crop_h * crop_w, 1) < 0.02:
+        # Face must cover at least 0.8 % of the person crop area
+        if (fw * fh) / max(crop_h * crop_w, 1) < 0.008:
             return False
 
         # ── 2. Skin-tone check (HSV range for human skin) ─────────────
@@ -75,21 +83,18 @@ class FaceIdentifier:
         skin_mask = cv2.bitwise_or(mask1, mask2)
         skin_ratio = np.count_nonzero(skin_mask) / max(skin_mask.size, 1)
         
-        # A real face crop should have at least 10 % skin-tone pixels
-        if skin_ratio < 0.10:
+        # A real face crop should have at least 5 % skin-tone pixels
+        if skin_ratio < 0.05:
             return False
 
         # ── 3. Eye-region texture (Laplacian variance) ────────────────
-        # Paintings have very smooth eye areas; real eyes have fine texture
-        # YuNet provides 5 landmarks: [right_eye, left_eye, nose, r_mouth, l_mouth]
-        # Landmarks start at index 4 in the face array: (x4,y4), (x5,y5), ...
         try:
             # Right eye
             rex, rey = int(face[4]), int(face[5])
             # Left eye
             lex, ley = int(face[6]), int(face[7])
             
-            eye_patch_size = max(10, fw // 5)
+            eye_patch_size = max(8, fw // 5)
             
             def eye_patch_variance(cx, cy):
                 ex1 = max(0, cx - eye_patch_size)
@@ -101,58 +106,24 @@ class FaceIdentifier:
                     return 999.0
                 gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
                 lap = cv2.Laplacian(gray, cv2.CV_64F)
-                return lap.var()
+                return float(lap.var())
             
             right_var = eye_patch_variance(rex, rey)
             left_var  = eye_patch_variance(lex, ley)
             avg_eye_var = (right_var + left_var) / 2
             
-            # Flat/painted eyes have very low Laplacian variance (< 60)
-            # Real eyes (with texture, reflections, lashes) are typically > 60
-            if avg_eye_var < 60.0:
+            # WhatsApp/camera compression blurs eye patches down to 20-30 var
+            # Only reject completely flat/synthetic surfaces (< 20.0)
+            if avg_eye_var < 20.0:
                 return False
             
             # ── 4. Landmark geometry sanity ───────────────────────────
-            nose_x, nose_y = int(face[8]), int(face[9])
-            
             inter_eye_dist = np.hypot(rex - lex, rey - ley)
-            if inter_eye_dist < 5:
+            if inter_eye_dist < 4:
                 return False  # Eyes on top of each other → bad detection
-            
-            # Nose should be below both eyes
-            if nose_y <= min(rey, ley):
-                return False
-            
-            # Nose should be roughly centred between the eyes
-            nose_x_ratio = abs(nose_x - (rex + lex) / 2) / max(inter_eye_dist, 1)
-            if nose_x_ratio > 0.7:
-                return False  # Nose too far to one side
-            
-            # ── 5. Micro-motion liveness (over several frames) ────────
-            if track_id is not None:
-                eye_cx = (rex + lex) / 2
-                eye_cy = (rey + ley) / 2
-                
-                if track_id not in self._motion_history:
-                    self._motion_history[track_id] = deque(maxlen=self._MOTION_WINDOW)
-                
-                self._motion_history[track_id].append((eye_cx, eye_cy))
-                history = self._motion_history[track_id]
-                
-                if len(history) >= self._MOTION_WINDOW:
-                    positions = np.array(list(history))
-                    # Total path length over the observation window
-                    diffs = np.diff(positions, axis=0)
-                    total_motion = np.sum(np.hypot(diffs[:, 0], diffs[:, 1]))
-                    
-                    # Paintings: total_motion ≈ 0 (perfectly static)
-                    # Real faces: even if the person is still, camera noise
-                    # and micro-expressions create > 1.5 px of total movement
-                    if total_motion < self._MIN_MOTION_PX:
-                        return False  # Too static → likely a painting/poster
 
         except (IndexError, TypeError):
-            pass  # If landmarks are malformed, skip geometry checks
+            pass
 
         return True
 
@@ -177,22 +148,32 @@ class FaceIdentifier:
         valid_ext = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
         if not os.path.exists(self.known_dir):
             return
+
         for file in os.listdir(self.known_dir):
             if file.lower().endswith(valid_ext):
                 base = os.path.splitext(file)[0]
                 if "_" in base:
-                    name, pid = base.split("_", 1)
+                    name_part, pid_part = base.split("_", 1)
                 else:
-                    name = base
-                    pid = f"ID-{base.upper()[:4]}"
+                    name_part = base
+                    pid_part = f"ID-{base.upper()[:4]}"
+
+                name = name_part.strip().capitalize()
+                pid = pid_part.strip()
+
                 img = cv2.imread(os.path.join(self.known_dir, file))
                 if img is None:
                     continue
                 feat = self._extract_face_feature(img)
                 if feat is not None:
-                    self.known_database[name] = {
-                        "name": name, "person_id": pid, "feature": feat
-                    }
+                    if name not in self.known_database:
+                        self.known_database[name] = {
+                            "name": name,
+                            "person_id": pid,
+                            "features": []
+                        }
+                    self.known_database[name]["features"].append(feat)
+                    self.known_database[name]["feature"] = feat
                     print(f"✅ Registered: {name} ({pid}) from {file}")
                 else:
                     print(f"⚠️  No face in reference photo: {file}")
@@ -200,8 +181,7 @@ class FaceIdentifier:
     def recognize_face_in_crop(self, crop_bgr, track_id=None):
         """
         Identify a face within a YOLO person bounding box.
-        track_id is passed to enable cross-frame micro-motion liveness.
-        Returns (name, person_id, confidence%) or (None, None, 0.0).
+        Returns: (name, person_id, confidence%) or (None, None, 0.0).
         """
         if not self.known_database:
             return None, None, 0.0
@@ -209,39 +189,60 @@ class FaceIdentifier:
             return None, None, 0.0
 
         h, w = crop_bgr.shape[:2]
-        if h < 60 or w < 40:
+        if h < 40 or w < 25:
             return None, None, 0.0
 
-        self.detector.setInputSize((w, h))
-        _, faces = self.detector.detect(crop_bgr)
+        # Optimization: in a standing/walking person crop, the face is in the upper 55%
+        # Searching the upper half first gives a higher resolution face detection
+        head_h = max(35, int(h * 0.55))
+        head_crop = crop_bgr[:head_h, :]
+
+        self.detector.setInputSize((w, head_h))
+        _, faces = self.detector.detect(head_crop)
+
+        # Fallback to full crop if no face was found in the upper half
+        if faces is None or len(faces) == 0:
+            self.detector.setInputSize((w, h))
+            _, faces = self.detector.detect(crop_bgr)
+            detect_crop = crop_bgr
+            cur_h = h
+        else:
+            detect_crop = head_crop
+            cur_h = head_h
+
         if faces is None or len(faces) == 0:
             return None, None, 0.0
 
-        # Apply full liveness filter
+        # Apply liveness filter
         live_faces = [
             f for f in faces
-            if self._is_real_human_face(f, crop_bgr, h, w, track_id)
+            if self._is_real_human_face(f, detect_crop, cur_h, w, track_id)
         ]
         if not live_faces:
             return None, None, 0.0
 
         best_face = max(live_faces, key=lambda f: f[2] * f[3])
-        aligned = self.recognizer.alignCrop(crop_bgr, best_face)
+        aligned = self.recognizer.alignCrop(detect_crop, best_face)
         feature = self.recognizer.feature(aligned)
 
         best_match = best_id = None
         best_score = -1.0
         for name, data in self.known_database.items():
-            score = self.recognizer.match(
-                feature, data["feature"], cv2.FaceRecognizerSF_FR_COSINE
-            )
-            if score > self.cosine_threshold and score > best_score:
-                best_score = score
-                best_match = name
-                best_id = data["person_id"]
+            features_list = data.get("features", [data["feature"]])
+            for ref_feat in features_list:
+                score = self.recognizer.match(
+                    feature, ref_feat, cv2.FaceRecognizerSF_FR_COSINE
+                )
+                if score > best_score:
+                    best_score = score
+                    best_match = name
+                    best_id = data["person_id"]
 
-        if best_match is not None:
-            conf = min(100.0, max(0.0, (best_score / 0.8) * 100))
+        # SFace Cosine Similarity evaluation:
+        # 0.45 threshold ensures separation between staff while providing high recall
+        if best_match is not None and best_score >= self.cosine_threshold:
+            # Map [0.45, 0.70] into an intuitive 75% - 98% confidence range
+            conf = min(99.0, max(75.0, 75.0 + ((best_score - self.cosine_threshold) / 0.25) * 23.0))
             return best_match, best_id, conf
 
         return None, None, 0.0

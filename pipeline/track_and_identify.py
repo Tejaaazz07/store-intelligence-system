@@ -39,7 +39,7 @@ from person_classifier import (
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 # Minimum confidence (%) to accept a face match as a real identification
-MIN_CONFIDENCE_PCT = 85.0
+MIN_CONFIDENCE_PCT = 75.0
 
 # Motion tracker: how many frames to observe & minimum cumulative bbox movement
 MOTION_FRAMES        = 12
@@ -337,17 +337,22 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
                     if enable_voice:
                         announce_voice(person.category, person.face_name)
 
-                # ── Log first identification ───────────────────────────
-                log_key = f"{tid}_{person.face_name or 'customer'}"
-                if log_key not in logged_identities:
-                    logged_identities.add(log_key)
-                    if person.is_worker:
+                # ── Log identification (immediate for workers, confirmed for customers) ──
+                if person.is_worker:
+                    log_key = f"{tid}_{person.face_name}"
+                    if log_key not in logged_identities:
+                        logged_identities.add(log_key)
                         print(f"🎯 {person.emoji} {person.category}: {person.face_name} (ID: {person.face_id})  "
                               f"Confidence: {person.face_confidence:.1f}%")
                         log_event_to_db("entry",
                                         f"{person.face_name} ({person.face_id}) [{person.category}]",
                                         role=person.category.lower())
-                    else:
+                elif person.frames_seen >= 8:
+                    # Require at least 8 continuous frames to filter out 1-frame glitches
+                    # and give face recognition time to recognize staff
+                    log_key = f"{tid}_customer"
+                    if log_key not in logged_identities:
+                        logged_identities.add(log_key)
                         print(f"🎯 🛍️ Customer #{tid} detected")
                         log_event_to_db("entry", f"Customer #{tid}", role="customer")
 
