@@ -138,51 +138,59 @@ def _draw_person(frame, x1, y1, x2, y2, person: PersonInfo):
 
 
 def _draw_hud(frame, width, height, face_id, classifier, banner_text, banner_timer, model_name="YOLO26"):
-    """Draw the heads-up display overlay."""
-    # ── Header ─────────────────────────────────────────────────────────
-    cv2.putText(frame,
-                f"Store Intelligence — {model_name} Detection & Face Recognition",
-                (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2)
+    """Draw a clean, non-overlapping heads-up display overlay."""
+    # ── Top semi-transparent banner ────────────────────────────────────
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (width, 68), (18, 18, 18), -1)
+    cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
 
+    # Header title
     cv2.putText(frame,
-                f"Registered Staff: {len(face_id.known_database)}",
-                (20, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 220, 220), 2)
+                f"Store Intelligence - {model_name} Recognition",
+                (15, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
-    # ── Live counts ────────────────────────────────────────────────────
+    # Live counts & staff info
     counts = classifier.active_counts()
-    count_text = (f"Workers: {counts['workers']} | Visionaries: {counts['visionaries']} | "
-                  f"Hackers: {counts['hackers']} | Customers: {counts['customers']}")
-    cv2.putText(frame, count_text,
-                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 255, 180), 2)
+    stat_text = (f"Staff: {len(face_id.known_database)} | "
+                 f"Workers: {counts['workers']} | "
+                 f"Customers: {counts['customers']}")
+    cv2.putText(frame, stat_text,
+                (15, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 235, 235), 2)
 
-    # ── Legend ─────────────────────────────────────────────────────────
-    legend_x = width - 250
-    legend_h = 120
-    cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (30, 30, 30), -1)
-    cv2.rectangle(frame, (legend_x, 10), (width - 10, legend_h), (80, 80, 80), 1)
-    cv2.putText(frame, "Legend & Roles", (legend_x + 10, 28),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    # ── Legend (Bottom-Right corner to never collide with top stats) ───
+    legend_w = 205
+    legend_h = 88
+    legend_x = max(10, width - legend_w - 10)
+    legend_y = max(75, height - legend_h - 10)
 
-    y_off = 48
+    cv2.rectangle(frame, (legend_x, legend_y),
+                  (legend_x + legend_w, legend_y + legend_h), (25, 25, 25), -1)
+    cv2.rectangle(frame, (legend_x, legend_y),
+                  (legend_x + legend_w, legend_y + legend_h), (75, 75, 75), 1)
+    cv2.putText(frame, "Roles & Categories", (legend_x + 8, legend_y + 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 240), 1)
+
+    y_off = legend_y + 32
     legend_items = [
         ("Visionary (Tejas)", ROLE_STYLES["Visionary"]["color"]),
         ("Hacker (Lakshana, Mehaa)", ROLE_STYLES["Hacker"]["color"]),
         ("Hustler (Shirley, Rithika)", ROLE_STYLES["Hustler"]["color"]),
-        ("Customer (Shopper)", ROLE_STYLES["Customer"]["color"]),
+        ("Customer", ROLE_STYLES["Customer"]["color"]),
     ]
     for label_str, color in legend_items:
-        cv2.rectangle(frame, (legend_x + 10, y_off - 10),
-                      (legend_x + 24, y_off + 2), color, -1)
-        cv2.putText(frame, label_str, (legend_x + 30, y_off),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1)
-        y_off += 17
+        cv2.rectangle(frame, (legend_x + 8, y_off - 8),
+                      (legend_x + 18, y_off + 2), color, -1)
+        cv2.putText(frame, label_str, (legend_x + 24, y_off),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.33, (255, 255, 255), 1)
+        y_off += 14
 
     # ── Identification banner ──────────────────────────────────────────
     if banner_text and (time.time() - banner_timer) < 4.0:
-        cv2.rectangle(frame, (20, height - 70), (width - 20, height - 20),
+        clean_banner = banner_text.replace("★", "").replace("—", "-")
+        cv2.rectangle(frame, (20, height - 60), (width - 20, height - 15),
                       (0, 255, 128), -1)
-        cv2.putText(frame, f"  {banner_text}", (30, height - 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.80, (0, 0, 0), 2)
+        cv2.putText(frame, f"  {clean_banner}", (30, height - 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 0, 0), 2)
 
 
 # ── Main pipeline ──────────────────────────────────────────────────────────────
@@ -200,11 +208,16 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
     print(f"👥 Known staff registered: {len(face_id.known_database)}")
 
     # Open video capture (use DirectShow on Windows for reliable webcam access)
-    is_webcam = isinstance(video_src, int)
-    if is_webcam and sys.platform == "win32":
-        cap = cv2.VideoCapture(video_src, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(video_src)
+    is_webcam = isinstance(video_src, int) or str(video_src).strip() in ("0", "1", "2")
+    if is_webcam:
+        cam_idx = int(video_src)
+        if sys.platform == "win32":
+            cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
+            if not cap.isOpened() or not cap.read()[0]:
+                cap.release()
+                cap = cv2.VideoCapture(cam_idx)
+        else:
+            cap = cv2.VideoCapture(cam_idx)
     else:
         cap = cv2.VideoCapture(video_src)
 
@@ -230,7 +243,7 @@ def run_pipeline(source="0", model_path="yolo26n.pt", show_window=True, save_out
     frame_count       = 0
     consecutive_empty = 0
 
-    window_name = f"Store Intelligence — {model_tag} Recognition"
+    window_name = f"Store Intelligence - {model_tag} Recognition"
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         if width > 1280 or height > 720:

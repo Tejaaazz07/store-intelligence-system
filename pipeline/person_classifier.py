@@ -29,11 +29,11 @@ DEFAULT_WORKER_ROLES: Dict[str, str] = {
 # Visual styling for each role/category
 # BGR colour, display prefix, emoji badge
 ROLE_STYLES = {
-    "Visionary": {"color": (255, 215, 0),   "prefix": "★ Visionary", "emoji": "✨", "badge": "V"},
-    "Hacker":    {"color": (0, 255, 128),   "prefix": "★ Hacker",    "emoji": "💻", "badge": "H"},
-    "Hustler":   {"color": (255, 105, 180), "prefix": "★ Hustler",   "emoji": "⚡", "badge": "H"},
-    "Worker":    {"color": (0, 215, 255),   "prefix": "★ Worker",    "emoji": "👷", "badge": "W"},
-    "Customer":  {"color": (255, 140, 0),   "prefix": "Customer",     "emoji": "🛍️", "badge": "C"},
+    "Visionary": {"color": (255, 215, 0),   "prefix": "[V] Visionary", "emoji": "✨", "badge": "V"},
+    "Hacker":    {"color": (0, 255, 128),   "prefix": "[H] Hacker",    "emoji": "💻", "badge": "H"},
+    "Hustler":   {"color": (255, 105, 180), "prefix": "[H] Hustler",   "emoji": "⚡", "badge": "H"},
+    "Worker":    {"color": (0, 215, 255),   "prefix": "[W] Worker",    "emoji": "👷", "badge": "W"},
+    "Customer":  {"color": (255, 140, 0),   "prefix": "Customer",      "emoji": "🛍️", "badge": "C"},
 }
 
 
